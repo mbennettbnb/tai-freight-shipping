@@ -1,0 +1,29 @@
+/**
+ * TAI Freight Shipping – Admin styles
+ */
+
+/* Test Connection button on settings page */
+.tai-freight-test-connection {
+    margin-top: 10px;
+}
+
+.tai-freight-test-connection .button {
+    margin-right: 10px;
+}
+
+.tai-freight-test-result {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 3px;
+    font-weight: 600;
+}
+
+.tai-freight-test-result.success {
+    color: #0a6e0a;
+    background: #ecf7ec;
+}
+
+.tai-freight-test-result.error {
+    color: #8a1f1f;
+    background: #fbeaea;
+}
