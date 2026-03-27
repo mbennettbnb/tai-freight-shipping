@@ -1,5 +1,5 @@
 === TAI Freight Shipping ===
-Contributors: yourname
+Contributors: Michael Bennett
 Tags: woocommerce, shipping, freight, ltl, tai-software
 Requires at least: 5.8
 Tested up to: 6.5
