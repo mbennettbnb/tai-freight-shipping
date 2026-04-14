@@ -544,13 +544,20 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
 
         if ( isset( $response['Quotes'] ) && is_array( $response['Quotes'] ) ) {
             $quotes = $response['Quotes'];
+            $this->logger->log( 'Quote response shape detected: Quotes.', 'debug' );
         } elseif ( isset( $response['RateQuotes'] ) && is_array( $response['RateQuotes'] ) ) {
             $quotes = $response['RateQuotes'];
+            $this->logger->log( 'Quote response shape detected: RateQuotes.', 'debug' );
         } elseif ( isset( $response['CarrierQuotes'] ) && is_array( $response['CarrierQuotes'] ) ) {
             $quotes = $response['CarrierQuotes'];
-        } elseif ( is_array( $response ) && ! empty( $response ) && isset( reset( $response )['TotalPrice'] ) ) {
-            // Response might be a flat list of quote objects.
-            $quotes = $response;
+            $this->logger->log( 'Quote response shape detected: CarrierQuotes.', 'debug' );
+        } elseif ( is_array( $response ) && ! empty( $response ) ) {
+            $first = reset( $response );
+            if ( is_array( $first ) && $this->has_quote_price_key( $first ) ) {
+                // Response is a flat list of quote objects.
+                $quotes = $response;
+                $this->logger->log( 'Quote response shape detected: flat array.', 'debug' );
+            }
         }
 
         if ( empty( $quotes ) ) {
@@ -563,16 +570,11 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
         $tax_status     = $this->get_option( 'tax_status', 'taxable' );
 
         foreach ( $quotes as $index => $quote ) {
-            // Extract price – try common key names.
-            $cost = 0;
-            foreach ( array( 'TotalPrice', 'Total', 'Price', 'Cost', 'Rate', 'TotalCost', 'TotalCharges' ) as $key ) {
-                if ( isset( $quote[ $key ] ) && is_numeric( $quote[ $key ] ) ) {
-                    $cost = (float) $quote[ $key ];
-                    break;
-                }
-            }
+            $normalized = $this->normalize_quote( $quote );
+            $cost       = (float) $normalized['price'];
 
             if ( $cost <= 0 ) {
+                $this->logger->log( sprintf( 'Skipping quote #%d: no valid price key found.', $index + 1 ), 'debug' );
                 continue;
             }
 
@@ -582,29 +584,13 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
             }
 
             // Build a label from carrier info.
-            $carrier_name = '';
-            foreach ( array( 'CarrierName', 'Carrier', 'SCAC', 'ServiceLevel', 'CarrierSCAC' ) as $key ) {
-                if ( ! empty( $quote[ $key ] ) ) {
-                    $carrier_name = sanitize_text_field( $quote[ $key ] );
-                    break;
-                }
-            }
-
-            $service_desc = '';
-            foreach ( array( 'ServiceDescription', 'ServiceLevel', 'Service', 'TariffDescription' ) as $key ) {
-                if ( ! empty( $quote[ $key ] ) && $quote[ $key ] !== $carrier_name ) {
-                    $service_desc = sanitize_text_field( $quote[ $key ] );
-                    break;
-                }
-            }
+            $carrier_name = $normalized['carrier_name'];
+            $service_desc = $normalized['service_description'];
 
             $transit = '';
-            foreach ( array( 'TransitDays', 'EstimatedTransitDays', 'TransitTime' ) as $key ) {
-                if ( ! empty( $quote[ $key ] ) ) {
-                    /* translators: %s: number of transit days */
-                    $transit = sprintf( __( ' (%s days)', 'tai-freight-shipping' ), sanitize_text_field( $quote[ $key ] ) );
-                    break;
-                }
+            if ( '' !== $normalized['transit_days'] ) {
+                /* translators: %s: number of transit days */
+                $transit = sprintf( __( ' (%s days)', 'tai-freight-shipping' ), $normalized['transit_days'] );
             }
 
             $label = trim( $carrier_name . ( $service_desc ? ' – ' . $service_desc : '' ) . $transit );
@@ -619,12 +605,102 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
                 'taxes'     => ( 'taxable' === $tax_status ) ? '' : false,
                 'package'   => false,
                 'meta_data' => array(
-                    'tai_raw_quote' => $quote,
+                    'tai_raw_quote' => $normalized['raw_quote'],
                 ),
             );
 
+            $this->logger->log( sprintf( 'Accepted quote #%d: %s @ %.2f.', $index + 1, $label, $cost ), 'debug' );
             $this->add_rate( $rate );
         }
+    }
+
+    /**
+     * Determine whether a quote row has a recognized price key.
+     *
+     * @param array $quote Quote row.
+     * @return bool
+     */
+    private function has_quote_price_key( $quote ) {
+        foreach ( $this->get_price_keys() as $key ) {
+            if ( isset( $quote[ $key ] ) ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Normalize a raw quote object to an internal parser shape.
+     *
+     * @param array $quote Raw quote object.
+     * @return array
+     */
+    private function normalize_quote( $quote ) {
+        $price = 0;
+        foreach ( $this->get_price_keys() as $key ) {
+            if ( isset( $quote[ $key ] ) && is_numeric( $quote[ $key ] ) ) {
+                $price = (float) $quote[ $key ];
+                break;
+            }
+        }
+
+        $carrier_name = '';
+        foreach ( array( 'carrierName', 'CarrierName', 'Carrier', 'carrierSCAC', 'CarrierSCAC', 'SCAC' ) as $key ) {
+            if ( ! empty( $quote[ $key ] ) ) {
+                $carrier_name = sanitize_text_field( $quote[ $key ] );
+                break;
+            }
+        }
+
+        $service_description = '';
+        foreach ( array( 'tariffDescription', 'TariffDescription', 'ServiceDescription', 'serviceLevel', 'ServiceLevel', 'Service' ) as $key ) {
+            if ( ! empty( $quote[ $key ] ) && sanitize_text_field( $quote[ $key ] ) !== $carrier_name ) {
+                $service_description = sanitize_text_field( $quote[ $key ] );
+                break;
+            }
+        }
+
+        $transit_days = '';
+        foreach ( array( 'transitTime', 'TransitTime', 'TransitDays', 'EstimatedTransitDays' ) as $key ) {
+            if ( isset( $quote[ $key ] ) && '' !== (string) $quote[ $key ] ) {
+                $transit_days = sanitize_text_field( (string) $quote[ $key ] );
+                break;
+            }
+        }
+
+        return array(
+            'price'               => $price,
+            'carrier_name'        => $carrier_name,
+            'service_description' => $service_description,
+            'transit_days'        => $transit_days,
+            'raw_quote'           => $quote,
+        );
+    }
+
+    /**
+     * Get supported quote price keys across known API response schemas.
+     *
+     * @return array
+     */
+    private function get_price_keys() {
+        return array(
+            'priceTotal',
+            'TotalPrice',
+            'totalPrice',
+            'Total',
+            'total',
+            'Price',
+            'price',
+            'Cost',
+            'cost',
+            'Rate',
+            'rate',
+            'TotalCost',
+            'totalCost',
+            'TotalCharges',
+            'totalCharges',
+        );
     }
 
     /**
