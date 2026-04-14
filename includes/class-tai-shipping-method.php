@@ -153,6 +153,73 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
                 'desc_tip'    => true,
                 'options'     => $this->get_freight_class_options(),
             ),
+            'origin_country'        => array(
+                'title'       => __( 'Origin Country (API ID)', 'tai-freight-shipping' ),
+                'type'        => 'number',
+                'description' => __( 'Numeric country code expected by the TAI API. Default 1 (US).', 'tai-freight-shipping' ),
+                'default'     => '1',
+                'desc_tip'    => true,
+                'custom_attributes' => array( 'min' => 1, 'step' => 1 ),
+            ),
+            'destination_country'   => array(
+                'title'       => __( 'Destination Country (API ID)', 'tai-freight-shipping' ),
+                'type'        => 'number',
+                'description' => __( 'Numeric country code expected by the TAI API. Used when destination country cannot be mapped.', 'tai-freight-shipping' ),
+                'default'     => '1',
+                'desc_tip'    => true,
+                'custom_attributes' => array( 'min' => 1, 'step' => 1 ),
+            ),
+            'weight_units'          => array(
+                'title'       => __( 'Weight Units', 'tai-freight-shipping' ),
+                'type'        => 'select',
+                'description' => __( 'Unit enum sent to TAI in WeightUnits.', 'tai-freight-shipping' ),
+                'default'     => '0',
+                'desc_tip'    => true,
+                'options'     => array(
+                    '0' => __( '0 (Pounds)', 'tai-freight-shipping' ),
+                    '1' => __( '1 (Kilograms)', 'tai-freight-shipping' ),
+                ),
+            ),
+            'dimension_units'       => array(
+                'title'       => __( 'Dimension Units', 'tai-freight-shipping' ),
+                'type'        => 'select',
+                'description' => __( 'Unit enum sent to TAI in DimensionUnits.', 'tai-freight-shipping' ),
+                'default'     => '0',
+                'desc_tip'    => true,
+                'options'     => array(
+                    '0' => __( '0 (Inches)', 'tai-freight-shipping' ),
+                    '1' => __( '1 (Centimeters)', 'tai-freight-shipping' ),
+                ),
+            ),
+            'default_packaging_type' => array(
+                'title'       => __( 'Default Packaging Type', 'tai-freight-shipping' ),
+                'type'        => 'number',
+                'description' => __( 'Default TAI PackagingType enum for commodity lines.', 'tai-freight-shipping' ),
+                'default'     => '120',
+                'desc_tip'    => true,
+                'custom_attributes' => array( 'min' => 0, 'step' => 1 ),
+            ),
+            'accessorial_codes'     => array(
+                'title'       => __( 'Accessorial Codes', 'tai-freight-shipping' ),
+                'type'        => 'text',
+                'description' => __( 'Optional comma-separated accessorial codes to send with every quote request.', 'tai-freight-shipping' ),
+                'default'     => '',
+                'desc_tip'    => true,
+            ),
+            'legacy_support'        => array(
+                'title'       => __( 'Legacy Support', 'tai-freight-shipping' ),
+                'type'        => 'checkbox',
+                'label'       => __( 'Send LegacySupport=true in quote requests.', 'tai-freight-shipping' ),
+                'default'     => 'no',
+                'desc_tip'    => true,
+            ),
+            'customer_reference_number' => array(
+                'title'       => __( 'Customer Reference Number', 'tai-freight-shipping' ),
+                'type'        => 'text',
+                'description' => __( 'Optional static CustomerReferenceNumber for rate requests. Required when using a Broker Staff key.', 'tai-freight-shipping' ),
+                'default'     => '',
+                'desc_tip'    => true,
+            ),
             'fallback_rate'        => array(
                 'title'       => __( 'Fallback Rate ($)', 'tai-freight-shipping' ),
                 'type'        => 'text',
@@ -272,13 +339,16 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
      * @return array
      */
     private function build_rate_request( $destination, $commodities ) {
-        $origin_zip   = sanitize_text_field( $this->get_option( 'origin_zip', '' ) );
-        $origin_city  = sanitize_text_field( $this->get_option( 'origin_city', '' ) );
-        $origin_state = sanitize_text_field( $this->get_option( 'origin_state', '' ) );
-
-        $dest_zip   = sanitize_text_field( $destination['postcode'] );
-        $dest_city  = sanitize_text_field( $destination['city'] );
-        $dest_state = sanitize_text_field( $destination['state'] );
+        $origin_zip                = sanitize_text_field( $this->get_option( 'origin_zip', '' ) );
+        $dest_zip                  = sanitize_text_field( $destination['postcode'] );
+        $origin_country            = max( 1, absint( $this->get_option( 'origin_country', 1 ) ) );
+        $default_destination_id    = max( 1, absint( $this->get_option( 'destination_country', 1 ) ) );
+        $destination_country       = $this->map_destination_country_id( $destination, $default_destination_id );
+        $weight_units              = absint( $this->get_option( 'weight_units', 0 ) );
+        $dimension_units           = absint( $this->get_option( 'dimension_units', 0 ) );
+        $accessorial_codes         = $this->parse_accessorial_codes( $this->get_option( 'accessorial_codes', '' ) );
+        $legacy_support            = ( 'yes' === $this->get_option( 'legacy_support', 'no' ) );
+        $customer_reference_number = sanitize_text_field( $this->get_option( 'customer_reference_number', '' ) );
 
         /**
          * Filter the rate quote request body before sending to the TAI API.
@@ -291,19 +361,17 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
          * @param array $commodities Commodity list.
          */
         return apply_filters( 'tai_freight_rate_request_body', array(
-            'AuthenticationKey' => sanitize_text_field( $this->get_option( 'api_key', '' ) ),
-            'Origin'            => array(
-                'City'    => $origin_city,
-                'State'   => $origin_state,
-                'ZipCode' => $origin_zip,
-            ),
-            'Destination'       => array(
-                'City'    => $dest_city,
-                'State'   => $dest_state,
-                'ZipCode' => $dest_zip,
-            ),
-            'Commodities'       => $commodities,
-            'Accessorials'      => array(),
+            'AuthenticationKey'      => sanitize_text_field( $this->get_option( 'api_key', '' ) ),
+            'OriginZipCode'          => $origin_zip,
+            'OriginCountry'          => $origin_country,
+            'DestinationZipCode'     => $dest_zip,
+            'DestinationCountry'     => $destination_country,
+            'Commodities'            => $commodities,
+            'WeightUnits'            => $weight_units,
+            'DimensionUnits'         => $dimension_units,
+            'AccessorialCodes'       => $accessorial_codes,
+            'LegacySupport'          => $legacy_support,
+            'CustomerReferenceNumber' => $customer_reference_number,
         ), $destination, $commodities );
     }
 
@@ -314,8 +382,9 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
      * @return array
      */
     private function build_commodities( $package ) {
-        $commodities         = array();
-        $default_class       = sanitize_text_field( $this->get_option( 'default_freight_class', '70' ) );
+        $commodities            = array();
+        $default_class          = sanitize_text_field( $this->get_option( 'default_freight_class', '70' ) );
+        $default_packaging_type = absint( $this->get_option( 'default_packaging_type', 120 ) );
 
         foreach ( $package['contents'] as $item_id => $item ) {
             $product = $item['data'];
@@ -340,18 +409,76 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
                 $freight_class = $default_class;
             }
 
+            $packaging_type = get_post_meta( $product->get_id(), '_tai_packaging_type', true );
+            if ( '' === $packaging_type ) {
+                $packaging_type = $default_packaging_type;
+            }
+
+            $hazardous_material = get_post_meta( $product->get_id(), '_tai_hazardous_material', true );
+            $nmfc               = sanitize_text_field( (string) get_post_meta( $product->get_id(), '_tai_nmfc', true ) );
+            $additional_marks   = sanitize_text_field( (string) get_post_meta( $product->get_id(), '_tai_additional_markings', true ) );
+            $un_number          = sanitize_text_field( (string) get_post_meta( $product->get_id(), '_tai_un_number', true ) );
+            $packing_group      = absint( get_post_meta( $product->get_id(), '_tai_packing_group', true ) );
+
             $commodities[] = apply_filters( 'tai_freight_commodity_item', array(
-                'Description' => sanitize_text_field( $product->get_name() ),
-                'Weight'      => $weight * $qty,
-                'Class'       => $freight_class,
-                'Pieces'      => $qty,
-                'Length'      => $length,
-                'Width'       => $width,
-                'Height'      => $height,
+                'HandlingQuantity'   => absint( $qty ),
+                'PackagingType'      => absint( $packaging_type ),
+                'Length'             => (float) $length,
+                'Width'              => (float) $width,
+                'Height'             => (float) $height,
+                'WeightTotal'        => (float) ( $weight * $qty ),
+                'HazardousMaterial'  => in_array( strtolower( (string) $hazardous_material ), array( '1', 'true', 'yes', 'on' ), true ),
+                'PiecesTotal'        => absint( $qty ),
+                'FreightClass'       => (float) $freight_class,
+                'NMFC'               => $nmfc,
+                'Description'        => sanitize_text_field( $product->get_name() ),
+                'AdditionalMarkings' => $additional_marks,
+                'UNNumber'           => $un_number,
+                'PackingGroup'       => absint( $packing_group ),
             ), $product, $qty );
         }
 
         return $commodities;
+    }
+
+    /**
+     * Parse and sanitize accessorial codes from a comma-separated setting.
+     *
+     * @param string $raw_codes Raw setting value.
+     * @return array
+     */
+    private function parse_accessorial_codes( $raw_codes ) {
+        if ( ! is_string( $raw_codes ) || '' === trim( $raw_codes ) ) {
+            return array();
+        }
+
+        $codes = array_map( 'trim', explode( ',', $raw_codes ) );
+        $codes = array_filter( $codes, static function ( $code ) {
+            return '' !== $code;
+        } );
+
+        return array_values( array_map( 'sanitize_text_field', $codes ) );
+    }
+
+    /**
+     * Map WooCommerce destination country to TAI API country ID.
+     *
+     * @param array $destination             WooCommerce destination data.
+     * @param int   $default_destination_id Fallback country ID.
+     * @return int
+     */
+    private function map_destination_country_id( $destination, $default_destination_id ) {
+        $country = isset( $destination['country'] ) ? strtoupper( sanitize_text_field( $destination['country'] ) ) : '';
+
+        if ( 'US' === $country ) {
+            return 1;
+        }
+
+        if ( 'CA' === $country ) {
+            return 2;
+        }
+
+        return max( 1, absint( $default_destination_id ) );
     }
 
     /**
