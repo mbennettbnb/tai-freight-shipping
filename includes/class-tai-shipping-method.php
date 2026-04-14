@@ -40,6 +40,7 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
         $this->method_description = __( 'Real-time freight shipping rates from the TAI Software API.', 'tai-freight-shipping' );
         $this->supports           = array(
             'shipping-zones',
+            'settings',
             'instance-settings',
             'instance-settings-modal',
         );
