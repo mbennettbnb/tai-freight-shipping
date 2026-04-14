@@ -92,6 +92,14 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
                     'none'    => __( 'None', 'tai-freight-shipping' ),
                 ),
             ),
+            'customer_reference_number' => array(
+                'title'       => __( 'Customer Reference Number', 'tai-freight-shipping' ),
+                'type'        => 'text',
+                'description' => __( 'CustomerReferenceNumber sent to TAI. Required when using a Broker Staff key.', 'tai-freight-shipping' ),
+                'default'     => '',
+                'desc_tip'    => true,
+                'custom_attributes' => array( 'required' => 'required' ),
+            ),
         );
 
         $this->form_fields = array(
@@ -216,9 +224,10 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
             'customer_reference_number' => array(
                 'title'       => __( 'Customer Reference Number', 'tai-freight-shipping' ),
                 'type'        => 'text',
-                'description' => __( 'Optional static CustomerReferenceNumber for rate requests. Required when using a Broker Staff key.', 'tai-freight-shipping' ),
+                'description' => __( 'CustomerReferenceNumber sent to TAI rate requests. Required when using a Broker Staff key.', 'tai-freight-shipping' ),
                 'default'     => '',
                 'desc_tip'    => true,
+                'custom_attributes' => array( 'required' => 'required' ),
             ),
             'fallback_rate'        => array(
                 'title'       => __( 'Fallback Rate ($)', 'tai-freight-shipping' ),
@@ -291,6 +300,13 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
 
         $destination = $package['destination'];
         if ( empty( $destination['postcode'] ) ) {
+            return;
+        }
+
+        $customer_reference_number = sanitize_text_field( $this->get_option( 'customer_reference_number', '' ) );
+        if ( '' === $customer_reference_number ) {
+            $this->logger->log( 'Customer Reference Number is required but not configured.', 'error' );
+            $this->maybe_add_fallback_rate();
             return;
         }
 
@@ -373,6 +389,27 @@ class TAI_Freight_Shipping_Method extends WC_Shipping_Method {
             'LegacySupport'          => $legacy_support,
             'CustomerReferenceNumber' => $customer_reference_number,
         ), $destination, $commodities );
+    }
+
+    /**
+     * Validate and sanitize the customer reference number setting.
+     *
+     * @param string $key   Field key.
+     * @param string $value Submitted value.
+     * @return string
+     */
+    public function validate_customer_reference_number_field( $key, $value ) {
+        $value = sanitize_text_field( $value );
+
+        if ( '' !== $value ) {
+            return $value;
+        }
+
+        if ( class_exists( 'WC_Admin_Settings' ) ) {
+            WC_Admin_Settings::add_error( __( 'Customer Reference Number is required for TAI Freight Shipping.', 'tai-freight-shipping' ) );
+        }
+
+        return $this->get_option( $key, '' );
     }
 
     /**
