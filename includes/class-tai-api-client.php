@@ -42,6 +42,20 @@ class TAI_API_Client {
     private const API_PATH = '/PublicApi/Shipping';
 
     /**
+     * Request timeout in seconds.
+     *
+     * @var int
+     */
+    private const REQUEST_TIMEOUT = 60;
+
+    /**
+     * Number of retry attempts for timeout failures.
+     *
+     * @var int
+     */
+    private const TIMEOUT_RETRIES = 1;
+
+    /**
      * @param string     $base_url Base URL of the TAI TMS server.
      * @param string     $auth_key Authentication GUID.
      * @param TAI_Logger $logger   Logger instance.
@@ -178,8 +192,9 @@ class TAI_API_Client {
 
         $this->logger->log( "GET {$url}" );
 
-        $response = wp_remote_get( $url, array(
-            'timeout' => 30,
+        $response = $this->request_with_timeout_retry( $url, array(
+            'method'  => 'GET',
+            'timeout' => self::REQUEST_TIMEOUT,
             'headers' => array( 'Accept' => 'application/json' ),
         ) );
 
@@ -198,9 +213,9 @@ class TAI_API_Client {
 
         $this->logger->log( "PUT {$url} – body: " . wp_json_encode( $body ) );
 
-        $response = wp_remote_request( $url, array(
+        $response = $this->request_with_timeout_retry( $url, array(
             'method'  => 'PUT',
-            'timeout' => 30,
+            'timeout' => self::REQUEST_TIMEOUT,
             'headers' => array(
                 'Content-Type' => 'application/json',
                 'Accept'       => 'application/json',
@@ -223,6 +238,38 @@ class TAI_API_Client {
     }
 
     /**
+     * Perform an HTTP request and retry once when the failure is a timeout.
+     *
+     * @param string $url  Full request URL.
+     * @param array  $args wp_remote_request args.
+     * @return array|WP_Error
+     */
+    private function request_with_timeout_retry( string $url, array $args ) {
+        $attempts = self::TIMEOUT_RETRIES + 1;
+
+        for ( $attempt = 1; $attempt <= $attempts; $attempt++ ) {
+            $response = wp_remote_request( $url, $args );
+
+            if ( ! $this->is_timeout_error( $response ) || $attempt === $attempts ) {
+                return $response;
+            }
+
+            $this->logger->log(
+                sprintf(
+                    'HTTP timeout on attempt %1$d/%2$d for %3$s %4$s. Retrying once.',
+                    $attempt,
+                    $attempts,
+                    isset( $args['method'] ) ? $args['method'] : 'GET',
+                    $url
+                ),
+                'warning'
+            );
+        }
+
+        return $response;
+    }
+
+    /**
      * Determine the effective base URL, respecting test mode.
      *
      * @return string
@@ -233,6 +280,22 @@ class TAI_API_Client {
             return 'http://www.taibeta.com';
         }
         return $this->base_url;
+    }
+
+    /**
+     * Determine whether a request failure is a timeout.
+     *
+     * @param array|WP_Error $response wp_remote_* response.
+     * @return bool
+     */
+    private function is_timeout_error( $response ): bool {
+        if ( ! is_wp_error( $response ) ) {
+            return false;
+        }
+
+        $message = strtolower( $response->get_error_message() );
+
+        return false !== strpos( $message, 'timed out' ) || false !== strpos( $message, 'timeout' );
     }
 
     /**
